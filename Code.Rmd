@@ -1,0 +1,1329 @@
+---
+title: "Predicting the Outcome of Armed Conflict"
+subtitle: "Raymond Santiago Flores | STAT 3280 | Spring 2026"
+output: html_document
+runtime: shiny
+---
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(astsa)
+library(forecast)
+library(readxl)
+library(conflicted)
+library(tidyverse) 
+library(WDI)
+library(patchwork)
+library(plotly)
+library(ggforce)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::select)
+```
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+# Core conflict data
+conflict      <- readRDS("Data/UcdpPrioConflict_v25_1.rds")
+
+# Battle deaths
+deaths_conf   <- readRDS("Data/BattleDeaths_v25_1_conf copy.rds")
+
+# GED event
+ged           <- readRDS("Data/GEDEvent_v25_1 copy.rds")
+
+# Termination data
+termination <- read_csv("Data/UCDPConflictTerminationDataset_v4_2024_Conflict.csv")
+
+
+# Spreadsheets
+esd    <- read_excel("Data/External Support Dataset (ESD).xlsx")
+peace  <- read_excel("Data/Peace Agreement.xlsx")
+
+
+# Palette
+outcome_colors <- c(
+  "Peace Agreement" = "#1A6830",
+  "Ceasefire"       = "#4393C3",
+  "Victory"         = "#8B0000",
+  "Low Activity"    = "#D85A30",
+  "Other/Unclear"   = "#888780",
+  "Ongoing"         = "#2C2C2A"
+)
+
+conflict_colors <- c(
+  "Extrasystemic"        = "#4393C3",
+  "Interstate"           = "#2166AC",
+  "Intrastate"           = "#8B0000",
+  "Intl. Intrastate"     = "#D85A30"
+)
+
+support_colors <- c(
+  "External Support"    = "#8B0000",
+  "No External Support" = "#4393C3"
+)
+
+theme_conflict <- function() {
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor    = element_blank(),
+    panel.grid.major.x  = element_blank(),
+    panel.grid.major.y  = element_line(color = "grey93", linewidth = 0.5),
+    plot.title          = element_text(face = "bold", size = 15, hjust = 0),
+    plot.title.position = "plot",
+    plot.subtitle       = element_text(color = "grey40", size = 9, hjust = 0,
+                                       margin = ggplot2::margin(b = 10)),
+    plot.caption        = element_text(color = "grey60", size = 8,
+                                       margin = ggplot2::margin(t = 10)),
+    legend.position     = "bottom",
+    # Shiny additions — match app background so no white box flash
+    panel.background    = element_rect(fill = "#FAFAFA", color = NA),
+    plot.background     = element_rect(fill = "#FAFAFA", color = NA)
+  )
+}
+```
+
+## Introduction
+
+With global conflict and instability on the rise, information increases as well. The focus of this project is to visualize regional trends and present the analysis in an accessible way to inform a range of individuals. To do this, I used historical records from the Uppsala Conflict Data Program and the Peace Research Institute Oslo (UCDP/PRIO) Armed Conflict Dataset. The UCPD/PRIO database incorporates several datasets that were merged to explore aspects of armed conflict's progression. This includes datasets covering recorded deaths, peace agreements, and conflict records. Together, these sources can form a web of recorded information. To apply this information, a random forest machine learning model was employed to predict and visualize the results of armed conflict.
+
+## **Hotspots, 1946-2024**
+
+```{r viz 1, warning=FALSE, echo=FALSE, message=FALSE}
+# Viz 1 code cleaning
+conflict_clean_viz1 <- conflict %>% 
+  mutate(
+    country = str_trim(str_extract(location, "^[^:]+"))
+  ) %>% 
+  mutate(country= case_when(
+    str_detect(country, "Burma") ~ "Myanmar",
+    str_detect(country, "Zaire") ~ "Democratic Republic of Congo",
+    str_detect(country, "Soviet")~ "Russia",
+    str_detect(country, "Yugoslavia")~"Serbia",
+    TRUE~country)) %>%   
+  mutate(
+    country = str_trim(str_extract(country, "^[^,]+"))
+  ) %>% 
+  mutate(
+    region_label = case_when(
+    region ==1 ~ "Europe",
+    region ==2 ~ "Middle East",
+    region ==3 ~ "Asia",
+    region ==4 ~ "Africa",
+    region ==5 ~ "Americas",
+    TRUE ~ NA_character_
+),
+intensity_label = case_when(
+  intensity_level ==1 ~"Minor Conflict",
+  intensity_level ==2 ~ "War"
+  ),
+conflict_type_label = case_when(
+  type_of_conflict==1~ "Extrasystemic",
+  type_of_conflict==2~ "Interstate",
+  type_of_conflict==3~ "Intrastate",
+  type_of_conflict==4~ "Internationalized Intrastate",
+  TRUE ~ NA_character_
+),
+lat = case_when(
+    region ==1 ~ 54.0,  #Europe
+    region ==2 ~ 29.0, #Middle East
+    region ==3 ~ 34.0, #Asia
+    region ==4 ~ -2.0 ,#Africa
+    region ==5 ~ -14.0, #Americas
+    TRUE ~ NA_real_
+
+),
+lon = case_when(
+  region ==1 ~ 25.0,
+  region ==2 ~ 42.0,
+  region ==3~ 90.0,
+  region ==4 ~ 22.0,
+  region ==5 ~-60,
+  TRUE ~ NA_real_
+)) %>% 
+  dplyr::filter(
+    !is.na(region_label),
+    !is.na(conflict_type_label),
+    !is.na(year)) %>% 
+  select(conflict_id, country,location, side_a, side_b, year, #colnames(conflict_clean_tab_viz1)
+       region_label, intensity_level, intensity_label,  
+       conflict_type_label, lat, lon) %>% 
+  arrange(year)
+
+write_csv(conflict_clean_viz1, "Data/conflict_clean_viz1.csv")
+```
+
+Armed conflict is not random - it clusters geographically, intensifies in waves, and shifts over time. The map below shows all active conflicts in the UCDP dataset from 1946 to 2024. Each circle represents a country with at least one active conflict in that year; size reflects the number of concurrent conflicts, and color describes the conflict severity - dark red for war-level violence, blue for minor conflict.
+
+Use the year control to animate through time and to observe trends. A prime example is the end of the Cold War in 1991, which restructured the global conflict landscape, leading to a surge in intrastate wars concentrated in Africa, the Middle East, and Asia. This geographic and temporal context sets the stage for the core question this project investigates: given the factors of a conflict, can we predict how it ends?
+
+
+```{=html}
+<script type="module" src="https://public.tableau.com/javascripts/api/tableau.embedding.3.latest.min.js"></script>
+
+<tableau-viz id="tableauViz1"       
+  src='https://public.tableau.com/views/V1_2_17767357111760/Viz1Final'      
+  toolbar="bottom"
+  width="100%"
+  height="700">
+</tableau-viz>
+```
+
+Geography tells us where conflict happens — but external involvement shapes how it ends. Conflicts that receive foreign support terminate differently than those that do not, with externally backed wars more likely to end in ceasefire or ambiguous outcomes than in decisive resolution.
+
+```{r viz 2 data, warning=FALSE, message=FALSE, echo=FALSE}
+esd_flag <- esd %>%
+  group_by(conflict_id) %>%
+  summarize(
+    any_support   = max(ext_sup, na.rm = TRUE),
+    support_count = max(ext_sum, na.rm = TRUE),
+    support_label = if_else(any_support == 1, "External Support", "No External Support"),
+    .groups = "drop"
+  )
+
+viz2_data <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  mutate(
+    conflict_type = case_when(
+      type_of_conflict == 1 ~ "Extrasystemic",
+      type_of_conflict == 2 ~ "Interstate",
+      type_of_conflict == 3 ~ "Intrastate",
+      type_of_conflict == 4 ~ "Intl. Intrastate"
+    ),
+    termination_outcome = case_when(
+      c_outcome == 1 ~ "Peace Agreement",
+      c_outcome == 2 ~ "Ceasefire",
+      c_outcome == 3 ~ "Victory",
+      c_outcome == 4 ~ "Low Activity",
+      c_outcome == 5 ~ "Other/Unclear",
+      c_outcome == 6 ~ "Ongoing"
+    )
+  ) %>%
+  left_join(esd_flag, by = "conflict_id") %>%
+  mutate(support_label = replace_na(support_label, "No External Support")) %>%
+  dplyr::filter(!is.na(conflict_type), !is.na(termination_outcome))
+write_csv(viz2_data, "Data/viz2_termination_support.csv")
+```
+
+
+```{=html}
+<script type="module" src="https://public.tableau.com/javascripts/api/tableau.embedding.3.latest.min.js"></script>
+
+<tableau-viz id="tableauViz2"       
+  src='https://public.tableau.com/views/V2_2_17767358110440/Viz2Final'      
+  toolbar="bottom"
+  width="100%"
+  height="500">
+</tableau-viz>
+```
+
+
+These structural drivers — ideology, geography, and religion — shape not just why conflicts begin, but how they escalate. The following section examines the ideological and religious roots of rebel movements across four decades.
+
+
+### **Conflict Issues Heatmap**
+
+```{r, fig.width=18, fig.height=6.5, out.width="100%", echo=FALSE, message=FALSE}
+issues_dyad <- read_excel("Data/ucdp_issues_dataset_dyadyear_232.xlsx")
+
+issues_cleaned <-  issues_dyad %>% 
+  dplyr::filter(active_year == 1, year > 1000) %>% 
+  select(conflict_id, year, geography_1, ideology_1, 
+         religion_1, ethnicity_1) %>% 
+  mutate(
+    decade = paste0(floor(year /10) * 10, "s"),
+  Geography = case_when(
+      geography_1 == 1000 ~ "Global",
+      geography_1 == 2000 ~ "Regional",
+      geography_1 == 3000 ~ "National",
+      geography_1 == 4000 ~ "Subnational",
+      TRUE ~ NA_character_
+    ),
+    Ideology = case_when(
+      ideology_1 == 1000  ~ "Socialism",
+      ideology_1 == 1200  ~ "Communist",
+      ideology_1 == 2000  ~ "Decolonization",
+      ideology_1 == 3100  ~ "Nationalist",
+      ideology_1 == 3500  ~ "Royalist",
+      ideology_1 == 3600  ~ "Right-wing",
+      ideology_1 == 4000  ~ "Islamist",
+      ideology_1 == 5000  ~ "Anti-communist",
+      ideology_1 == 11000 ~ "Anti-Zionist",
+      TRUE ~ NA_character_
+    ),
+    Religion = case_when(
+      religion_1 == 1000 ~ "Muslim",
+      religion_1 == 2000 ~ "Christian",
+      religion_1 == 3000 ~ "Buddhist",
+      religion_1 == 4000 ~ "Hindu",
+      religion_1 == 5000 ~ "Sikh",
+      religion_1 == 6000 ~ "Secular",
+      religion_1 == 7000 ~ "Multi-religious",
+      TRUE ~ NA_character_
+    ),
+    Ethnicity = if_else(!is.na(ethnicity_1), "Ethnic group", NA_character_)
+  )
+
+issues_long <- issues_cleaned %>%
+  pivot_longer(
+    cols      = c(Geography, Ideology, Religion),
+    names_to  = "Dimension",
+    values_to = "Category"
+  ) %>%
+  dplyr::filter(!is.na(Category)) %>%
+  mutate(
+    # Ensure factor levels match your decade logic
+    decade = factor(decade, 
+                    levels = c("1980s", "1990s", "2000s", "2010s"),
+                    labels = c("1989 (Start)", "1990s", "2000s", "2010s"))
+  )
+
+issues_heat <- issues_long %>%
+  group_by(decade, Dimension, Category, .drop = TRUE) %>%
+  summarize(count = n(), .groups = "drop") %>%
+  group_by(decade, Dimension, .drop = TRUE) %>%
+  mutate(pct = round(count / sum(count) * 100, 0)) %>%
+  group_by(Dimension, Category) %>%
+  mutate(total = sum(count)) %>%
+  ungroup()
+
+category_order <- issues_heat %>%
+  group_by(Dimension, Category) %>%
+  summarize(total = sum(count), .groups = "drop") %>%
+  arrange(Dimension, total) %>%
+  pull(Category)
+
+issues_heat <- issues_heat %>%
+  mutate(Category = factor(Category, levels = category_order))
+annotation_df <- data.frame(
+  Dimension = "Ideology",
+  decade    = "2010s",
+  Category  = "Islamist",
+  label     = "Rise reflects post-Cold War\ndecline of secular leftist movements"
+)
+
+viz3 <- ggplot(issues_heat,
+       aes(x = decade, y = Category, fill = pct)
+) +
+  geom_tile(color = "white", linewidth = 0.7) +
+  geom_text(
+    aes(label = paste0(pct, "%"),
+        color = pct > 40),
+    fontface = "bold", size = 3.5
+  ) +
+  geom_tile(
+    data = issues_heat %>%
+      dplyr::filter((Dimension == "Religion"  & Category == "Muslim") |
+                    (Dimension == "Ideology"  & Category == "Islamist") |
+                    (Dimension == "Geography" & Category == "Global")),
+    aes(x = decade, y = Category),
+    fill = NA,
+    color = "#2C2C2A",
+    linewidth = 1.1
+  )+
+  facet_wrap(~ Dimension, scales = "free_y", ncol = 3) +
+  scale_fill_gradient(
+  low      = "#FDE8E8",
+  high     = "#8B0000",
+  name     = "% within\ndimension",
+  limits   = c(0, 100),
+  breaks   = c(0, 25, 50, 75, 100),
+  na.value = "grey94"   # <-- this line
+) +
+  scale_color_manual(
+    values = c("FALSE" = "grey30", "TRUE" = "white"),
+    guide  = "none"
+  ) +
+  labs(
+    title    = "The structural roots of armed conflict",
+    subtitle = "Ideology, geography, and religion of rebel groups — share of active conflict-years by decade",
+    x        = NULL,
+    y        = NULL,
+    caption  = "Source: UCDP Conflict Issues Dataset v23.2"
+  ) +
+  theme_conflict() 
+  theme(
+    panel.grid      = element_blank(),
+    strip.text      = element_text(face = "bold", size = 13),
+    axis.text.x     = element_text(size = 10, face = "bold"),
+    axis.text.y     = element_text(size = 10),
+    plot.title      = element_text(face = "bold", size = 16, hjust = .5),
+    plot.subtitle   = element_text(color = "grey40", size = 10, hjust = .5),
+    plot.caption    = element_text(color = "grey60", size = 8),
+    legend.position = "right",
+    panel.spacing   = unit(2, "lines")
+  )
+viz3
+```
+
+
+Beyond ideology, conflict intensity has shifted dramatically over time. The end of the Cold War in 1991 marked a turning point — extrasystemic and interstate conflicts declined while intrastate wars surged, often reaching war-level intensity.
+
+
+### **Escalation Patterns**
+
+```{r, fig.width=16, fig.height=10, out.width="100%", echo=FALSE}
+# Escalation summary
+escalation_summary <- conflict %>%
+  mutate(conflict_type = case_when(
+    type_of_conflict == 1 ~ "Extrasystemic",
+    type_of_conflict == 2 ~ "Interstate",
+    type_of_conflict == 3 ~ "Intrastate",
+    type_of_conflict == 4 ~ "Internationalized Intrastate"
+  )) %>%
+  filter(!is.na(conflict_type)) %>%
+  group_by(year, conflict_type) %>%
+  summarise(mean_intensity = mean(intensity_level, na.rm = TRUE), .groups = "drop")
+
+escalation_outcome <- termination %>%
+  filter(c_epterm == 1) %>%
+  mutate(outcome_label = case_when(
+    c_outcome == 1 ~ "Peace Agreement",
+    c_outcome == 2 ~ "Ceasefire",
+    c_outcome == 3 ~ "Victory",
+    c_outcome == 4 ~ "Low Activity",
+    c_outcome == 5 ~ "Other/Unclear",
+    c_outcome == 6 ~ "Ongoing"
+  )) %>%
+  filter(!is.na(outcome_label))
+
+# 4a: Fixed annotation and naming
+viz4a <- ggplot(escalation_summary,
+                aes(x = year, y = mean_intensity, color = conflict_type,
+                    linewidth = conflict_type == "Intrastate")) +
+  geom_vline(xintercept = 1991, linetype = "dashed", 
+             color = "grey70", linewidth = 0.5) +
+  geom_line() +
+  scale_linewidth_manual(values = c("TRUE" = 1.2, "FALSE" = 0.5), guide = "none") +
+  scale_color_manual(
+    values = c(
+      "Intrastate"                   = "#8B0000",
+      "Internationalized Intrastate" = "#DBA185",
+      "Interstate"                   = "#999999",
+      "Extrasystemic"                = "#BDC9BE"
+    ),
+    name = NULL
+  ) +
+  scale_y_continuous(
+    breaks = c(1, 2),
+    labels = c("1 — Minor\n(<1K deaths)", "2 — War\n(≥1K deaths)"),
+    limits = c(0.85, 2.15)
+  ) +
+  scale_x_continuous(breaks = seq(1950, 2020, by = 10), limits = c(1945, 2024)) +
+  labs(
+    title    = "Armed Conflict Intensity, 1946–2024",
+    subtitle = "Average intensity by conflict type | Dashed line = Cold War end (1991)",
+    x = NULL, y = NULL
+  ) +
+  theme_conflict() +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle   = element_text(color = "grey40", size = 10, hjust = 0.5),
+    legend.position = "right"
+  )
+
+# 4b: Cleaned bar chart
+viz4b <- escalation_outcome %>%
+  count(outcome_label) %>%
+  mutate(outcome_label = fct_reorder(outcome_label, n)) %>%
+  ggplot(aes(x = n, y = outcome_label, fill = outcome_label)) +
+  geom_col(width = 0.65) +
+  geom_text(aes(label = n), hjust = -0.3, size = 3.5, color = "grey20") +
+  scale_fill_manual(values = outcome_colors, guide = "none") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title    = "Most Conflicts End Without a Clear Resolution",
+    subtitle = "Total count of terminated conflict episodes by outcome type",
+    x = "Number of Conflicts", y = NULL,
+    caption  = "Source: UCDP/PRIO Armed Conflict Dataset v25.1"
+  ) + theme_conflict() + 
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle   = element_text(color = "grey40", size = 10, hjust = 0.5),
+    plot.caption    = element_text(color = "grey60", size = 8, 
+                                   margin = ggplot2::margin(t = 15))
+  )
+
+# Combine
+library(patchwork)
+viz4 <- (viz4a / viz4b) + 
+  plot_layout(heights = c(1.3, 1)) +
+  plot_annotation(theme = theme(plot.margin = ggplot2::margin(10, 10, 10, 10)))
+
+viz4
+```
+
+
+While most conflicts fade through low activity or unclear outcomes, external involvement dramatically extends their duration and deadliness. The interactive scatter below allows you to explore individual conflicts by duration, deaths, and support status.
+
+
+### **External Support Scatter Tool**
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+#Data Prep
+esd_flag <- esd %>%
+  group_by(conflict_id) %>%
+  summarize(
+    any_support   = max(ext_sup, na.rm = TRUE),
+    support_count = max(ext_sum, na.rm = TRUE),
+    support_label = if_else(any_support == 1, "External Support", "No External Support"),
+    .groups = "drop"
+  )
+
+deaths_summary <- deaths_conf %>%
+  group_by(conflict_id) %>%
+  summarize(total_deaths = sum(bd_best, na.rm = TRUE), .groups = "drop")
+
+viz5_data_clean <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  left_join(esd_flag, by = "conflict_id") %>%
+  left_join(deaths_summary, by = "conflict_id") %>%
+  mutate(
+    support_label = replace_na(support_label, "No External Support"),
+    support_count = replace_na(support_count, 0),
+    total_deaths  = if_else(replace_na(total_deaths, 0) <= 0, 1, total_deaths),
+    conflict_type = case_when(
+      type_of_conflict == 1 ~ "Extrasystemic",
+      type_of_conflict == 2 ~ "Interstate",
+      type_of_conflict == 3 ~ "Intrastate",
+      type_of_conflict == 4 ~ "Internationalized Intrastate"
+    )
+  ) %>%
+  dplyr::filter(!is.na(c_ep_dur), !is.na(conflict_type), total_deaths > 1) %>%
+  mutate(dur_jittered = c_ep_dur + runif(n(), -0.3, 0.3))
+
+#Medians used for dashed lines.
+median_lines <- viz5_data_clean %>%
+  group_by(support_label) %>%
+  summarize(med_dur = median(c_ep_dur), .groups = "drop")
+
+#Plot
+p5 <- ggplot(viz5_data_clean,
+             aes(x = dur_jittered, y = log10(total_deaths), 
+                 color = support_label, size = support_count + 1,
+                 text = paste0("<b>", location, "</b><br>",
+                               "Duration: ", c_ep_dur, " yrs<br>",
+                               "Deaths: ", scales::comma(round(total_deaths)), "<br>",
+                               "Support: ", support_label))) +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_vline(data = median_lines, aes(xintercept = med_dur, color = support_label),
+             linetype = "dashed", linewidth = 0.7) +
+  scale_color_manual(values = c("External Support" = "#8B0000", "No External Support" = "#4393C3")) +
+  scale_y_continuous(breaks = 1:6, labels = c("10", "100", "1K", "10K", "100K", "1M")) +
+  labs(x = "Conflict Duration (Years)", y = "Battle Deaths (Log Scale)",
+       subtitle = "Dashed lines indicate median duration per group") +
+  theme_conflict() +
+theme(legend.position = "none")
+
+# 4. FINAL PLOTLY CONVERSION
+viz5 <- ggplotly(p5, tooltip = "text") %>%
+  plotly::layout(
+    title = list(text = "<b>Externally Supported Conflicts Are Longer and Deadlier</b>", x = 0.5),
+    margin = list(t = 80, b = 50),
+    legend = list(orientation = "h", x = 0.5, xanchor = "center", y = -0.2)
+  )
+
+viz5
+```
+
+### **Conflict Termination**
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE, fig.width=12, fig.height=8, out.width="100%"}
+# --- VIZ 6: CONFLICT TERMINATION ALLUVIAL ---
+
+# 1. Clean and Reorder Data
+viz6_data <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  mutate(
+    conflict_type = case_when(
+      type_of_conflict == 1 ~ "Extrasystemic",
+      type_of_conflict == 2 ~ "Interstate",
+      type_of_conflict == 3 ~ "Intrastate",
+      type_of_conflict == 4 ~ "Intnl. Intrastate"
+    ),
+    termination_outcome = case_when(
+      c_outcome == 1 ~ "Peace agreement",
+      c_outcome == 2 ~ "Ceasefire",
+      c_outcome == 3 ~ "Victory",
+      c_outcome == 4 ~ "Low activity",
+      c_outcome == 5 ~ "Other/unclear",
+      c_outcome == 6 ~ "Ongoing"
+    )
+  ) %>%
+  left_join(esd_flag, by = "conflict_id") %>%
+  mutate(
+    support_label = replace_na(support_label, "No external support")
+  ) %>%
+  dplyr::filter(!is.na(conflict_type), !is.na(termination_outcome)) %>%
+  group_by(conflict_type, support_label, termination_outcome) %>%
+  summarize(freq = n(), .groups = "drop")
+
+# 2. Transform for Parallel Sets
+viz6_long <- gather_set_data(viz6_data, 1:3) %>%
+  mutate(x = case_when(
+    x == "conflict_type" ~ "Conflict Type",
+    x == "support_label" ~ "External Support",
+    x == "termination_outcome" ~ "Outcome"
+  ),
+  x = factor(x, levels = c("Conflict Type", "External Support", "Outcome")))
+
+# 3. Final Visualization
+viz6 <- ggplot(viz6_long,
+       aes(x = x, id = id, split = y, value = freq)) +
+  geom_parallel_sets(aes(fill = termination_outcome), alpha = 0.65, axis.width = 0.1) +
+  geom_parallel_sets_axes(axis.width = 0.1, fill = "grey90", color = "grey70") +
+  geom_parallel_sets_labels(colour = "grey10", size = 3.5, fontface = "bold", angle = 0) +
+  scale_fill_manual(
+    values = c(
+      "Peace agreement" = "#1A6830",
+      "Ceasefire"       = "#4393C3",
+      "Victory"         = "#8B0000", # Theme consistency
+      "Low activity"    = "#D85A30",
+      "Other/unclear"   = "#888780",
+      "Ongoing"         = "#2C2C2A"
+    ),
+    name = "Termination Outcome"
+  ) +
+  labs(
+    title    = "The Path from Conflict to Resolution",
+    subtitle = "Flow of conflict types through external support status to final termination outcomes",
+    caption  = "Source: UCDP Conflict Termination Dataset v4-2024 + External Support Dataset",
+    x = NULL, y = NULL
+  ) +
+  theme_conflict() +
+theme(
+  panel.grid      = element_blank(),
+  axis.text.y     = element_blank(),
+  axis.text.x     = element_text(face = "bold", size = 13, color = "black"),
+  plot.title      = element_text(face = "bold", size = 16, hjust = 0.5),
+  plot.subtitle   = element_text(color = "grey40", size = 10, hjust = 0.5),
+  plot.caption    = element_text(color = "grey60", size = 8,
+                                 margin = ggplot2::margin(t = 20)),
+  legend.position = "none"
+)
+
+viz6
+```
+
+
+## **Historical Conflict Dashboard App**
+
+```{r}
+
+# Libraries
+library(shiny)
+library(tidyverse)
+library(scales)
+library(DT)                         
+
+# Aesthetic Constants
+theme_rd    <- "#8B0000"
+bg_color    <- "#FAFAFA"
+typeface    <- "Georgia, serif"
+
+type_colors <- c(
+  "Extrasystemic"                  = "#4393C3",
+  "Interstate"                     = "#2166AC",
+  "Intrastate"                     = "#8B0000",
+  "Intrastate (Internationalized)" = "#D85A30"
+)
+
+# Theme
+theme_conflict <- function() {
+  theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor    = element_blank(),
+      panel.grid.major.x  = element_blank(),
+      panel.grid.major.y  = element_line(color = "grey93", linewidth = 0.5),
+      plot.title          = element_text(face = "bold", size = 15, hjust = 0),
+      plot.title.position = "plot",
+      plot.subtitle       = element_text(color = "grey40", size = 9, hjust = 0,
+                                         margin = ggplot2::margin(b = 10)),
+      plot.caption        = element_text(color = "grey60", size = 8,
+                                         margin = ggplot2::margin(t = 10)),
+      legend.position     = "bottom",
+      panel.background    = element_rect(fill = bg_color, color = NA),
+      plot.background     = element_rect(fill = bg_color, color = NA),
+      text                = element_text(family = typeface, color = "#2C2C2A")
+    )
+}
+
+# Data Loading
+conflict <- readRDS("UcdpPrioConflict_v25_1 2.rds")
+ged      <- readRDS("GEDEvent_v25_1.rds")
+
+ged_summary <- ged %>%
+  rename(conflict_id = conflict_new_id) %>%
+  group_by(conflict_id) %>%
+  summarise(
+    latitude      = median(latitude,  na.rm = TRUE),
+    longitude     = median(longitude, na.rm = TRUE),
+    battle_deaths = sum(best,         na.rm = TRUE),
+    .groups = "drop"
+  )
+
+conflict_data <- conflict %>%
+  mutate(
+    conflict_type = case_when(
+      type_of_conflict == 1 ~ "Extrasystemic",
+      type_of_conflict == 2 ~ "Interstate",
+      type_of_conflict == 3 ~ "Intrastate",
+      type_of_conflict == 4 ~ "Intrastate (Internationalized)",
+      TRUE ~ NA_character_
+    ),
+    intensity_level = if_else(intensity_level == 2, "War", "Minor conflict"),
+    region = case_when(
+      region == 1 ~ "Europe",
+      region == 2 ~ "Middle East",
+      region == 3 ~ "Asia",
+      region == 4 ~ "Africa",
+      region == 5 ~ "Americas",
+      TRUE ~ "Other"
+    ),
+    conflict_name = if_else(!is.na(location), location,
+                            paste("Conflict", conflict_id))
+  ) %>%
+  left_join(ged_summary, by = "conflict_id") %>%
+  mutate(battle_deaths = replace_na(battle_deaths, 0)) %>%
+  select(conflict_id, conflict_name, year, region, conflict_type,
+         intensity_level, latitude, longitude, battle_deaths) %>%
+  filter(!is.na(conflict_type), !is.na(year))
+
+# UI
+ui <- fluidPage(
+  tags$head(tags$style(HTML(paste0("
+    body { font-family: ", typeface, "; background-color: ", bg_color, "; }
+    h2, h4 { font-weight: bold; color: #2C2C2A; }
+    .well { background-color: #F0F0F0; border: none; }
+    .nav-tabs > li.active > a { font-weight: bold; color: ", theme_rd, ";
+                                 border-bottom: 2px solid ", theme_rd, "; }
+    .summary-box {
+      background: #fff;
+      border-left: 4px solid ", theme_rd, ";
+      padding: 10px 16px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+  ")))),
+  
+  titlePanel(
+    h2("Historical World Conflict Dashboard",
+       tags$small(style = "font-size:14px; color:grey; display:block;",
+                  "Analyzing the temporal behaviour and fatality distribution of global conflict."))
+  ),
+  
+  wellPanel(
+    style = "background-color: #f7f0f0; border-left: 4px solid #8B0000;
+           border-right: none; border-top: none; border-bottom: none;
+           border-radius: 0; padding: 12px 16px;",
+    p(HTML(
+      "<b>How to use this dashboard:</b> Use the filters on the left to specify conflicts by
+    time period, region, type, intensity, and minimum battle deaths. All four tabs will update
+     with your selection.<br><br>
+    <b>Temporal Heatmap</b> — shows how many conflicts were active each year by type, with darker red indicating more.
+    <br>
+    <b>Fatality Distribution</b> — shows the spread of battle deaths across conflict types
+    on a log scale.<br>
+    <b>Conflicts Over Time</b> — tracks the count of each conflict type year by year.<br>
+    <b>Conflict List</b> — searchable table summarizing conflicts by region, type, and intensity."
+    ), style = "font-size: 12px; color: #2C2C2A; margin: 0;")
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      
+      sliderInput("year_range", "Temporal Scope",
+                  min = 1946, max = 2024,
+                  value = c(1970, 2024), sep = ""),
+      
+      selectInput("region", "Focus Region",
+                  choices  = c("All", "Africa", "Americas", "Asia", "Europe", "Middle East"),
+                  selected = "All"),
+      
+      checkboxGroupInput("conflict_type", "Conflict Classification",
+                         choices  = c("Extrasystemic", "Interstate",
+                                      "Intrastate", "Intrastate (Internationalized)"),
+                         selected = c("Intrastate", "Intrastate (Internationalized)")),
+      
+      radioButtons("intensity", "Intensity Level",
+                   choices  = c("Both", "Minor conflict", "War"),
+                   selected = "Both"),
+      
+      numericInput("min_deaths", "Minimum Battle Deaths",
+                   value = 0, min = 0, step = 100),
+      
+      hr(),
+      
+      uiOutput("summary_box")
+    ),
+    
+    mainPanel(
+      width = 9,
+      tabsetPanel(                     
+        
+        tabPanel("Temporal Heatmap",
+                 br(),
+                 h4("Conflict Frequency by Type and Year",
+                    style = "text-align:center; font-weight:bold;"),
+                 p("Each block represents the number of active conflicts per year.",
+                   style = "color:grey; font-size:11px; text-align:center;"),
+                 plotOutput("heat_map", height = "320px")
+        ),
+        
+        tabPanel("Fatality Distribution",
+                 br(),
+                 h4("Battle Death Distribution by Conflict Type",
+                    style = "text-align:center; font-weight:bold;"),
+                 p("Density of conflicts by fatality count (log scale).",
+                   style = "color:grey; font-size:11px; text-align:center;"),
+                 plotOutput("dist_plot", height = "380px")
+        ),
+        
+        tabPanel("Conflicts Over Time",  
+                 br(),
+                 h4("Armed Conflicts by Type Over Time",
+                    style = "text-align:center; font-weight:bold;"),
+                 p("UCDP/PRIO Armed Conflict Dataset v25.1",
+                   style = "color:grey; font-size:11px; text-align:center;"),
+                 plotOutput("trend_plot", height = "420px")
+        ),
+        
+        tabPanel("Conflict List",
+                 br(),
+                 h4("Conflict List", style = "text-align:center; font-weight:bold;"),
+                 br(),
+                 DT::dataTableOutput("conflict_table", width = "100%")
+        )
+      )                                
+    )                                  
+  )                                  
+)                                      
+
+# Server
+server <- function(input, output) {
+  
+  filtered_data <- reactive({
+    d <- conflict_data %>%
+      filter(
+        year          >= input$year_range[1],
+        year          <= input$year_range[2],
+        conflict_type %in% input$conflict_type,
+        battle_deaths >= input$min_deaths
+      )
+    if (input$region    != "All")  d <- d %>% filter(region          == input$region)
+    if (input$intensity != "Both") d <- d %>% filter(intensity_level == input$intensity)
+    d
+  })
+  
+  output$summary_box <- renderUI({
+    d <- filtered_data()
+    HTML(paste0(
+      "<div class='summary-box'>",
+      "<b>", length(unique(d$conflict_id)), "</b> unique conflicts<br>",
+      "<b>", comma(sum(d$battle_deaths, na.rm = TRUE)), "</b> total battle deaths",
+      "</div>"
+    ))
+  })
+  
+  output$heat_map <- renderPlot(bg = bg_color, {
+    heat_data <- filtered_data() %>%
+      count(year, conflict_type) %>%
+      filter(!is.na(conflict_type)) %>%
+      rename(`Conflict Type` = conflict_type)
+    
+    validate(need(nrow(heat_data) > 0, "No data — adjust your filters."))
+    
+    ggplot(heat_data, aes(x = year, y = `Conflict Type`, fill = n)) +
+      geom_tile(color = "white", linewidth = 0.3) +
+      scale_fill_gradient(low = "#FDE8E8", high = theme_rd, name = "Conflicts") +
+      scale_x_continuous(breaks = seq(1946, 2024, by = 10)) +
+      labs(
+        x       = "Year",
+        y       = "Conflict Type",
+        caption = "Source: UCDP/PRIO Armed Conflict Dataset v25.1"
+      ) +
+      theme_conflict() +
+      theme(
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position    = "right",
+        axis.title.x       = element_text(size = 11, color = "grey30",
+                                          margin = ggplot2::margin(t = 8)),
+        axis.title.y       = element_text(size = 11, color = "grey30",
+                                          margin = ggplot2::margin(r = 8)),
+        axis.text.x        = element_text(size = 9),
+        axis.text.y        = element_text(size = 10),
+        plot.margin        = ggplot2::margin(t = 10, r = 60, b = 10, l = 10)
+      )
+  })
+  
+  output$dist_plot <- renderPlot(bg = bg_color, {
+    d <- filtered_data() %>% filter(battle_deaths > 0)
+    validate(need(nrow(d) > 5, "Not enough data — broaden your filters."))
+    
+    ggplot(d, aes(x = battle_deaths, fill = conflict_type, color = conflict_type)) +
+      geom_density(alpha = 0.45, linewidth = 0.7) +
+      scale_x_log10(
+        breaks = 10^(0:6),
+        labels = c("1", "10", "100", "1K", "10K", "100K", "1M")
+      ) +
+      scale_fill_manual(values  = type_colors, name = NULL) +
+      scale_color_manual(values = type_colors, name = NULL) +
+      labs(
+        x       = "Battle Deaths (log scale)",
+        y       = "Density",
+        caption = "Conflicts with 0 recorded deaths excluded. Source: UCDP/PRIO v25.1"
+      ) +
+      theme_conflict() +
+      theme(
+        axis.title.x = element_text(size = 11, color = "grey30",
+                                    margin = ggplot2::margin(t = 8)),
+        axis.title.y = element_text(size = 11, color = "grey30",
+                                    margin = ggplot2::margin(r = 8)),
+        axis.text.x  = element_text(size = 9),
+        axis.text.y  = element_text(size = 10)
+      )
+  })
+  
+  output$trend_plot <- renderPlot(bg = bg_color, {
+    d <- filtered_data()
+    validate(need(nrow(d) > 0, "No conflicts match the current filters."))
+    
+    trend <- d %>%
+      group_by(year, conflict_type) %>%
+      summarise(n = n(), .groups = "drop")
+    
+    ggplot(trend, aes(x = year, y = n, color = conflict_type, group = conflict_type)) +
+      geom_line(linewidth = 0.9, alpha = 0.8) +
+      geom_point(size = 2, alpha = 0.7) +
+      scale_color_manual(values = type_colors, name = NULL) +
+      scale_x_continuous(breaks = seq(1946, 2024, by = 10)) +
+      labs(
+        x       = "Year",
+        y       = "Number of Active Conflicts",
+        caption = "Source: UCDP/PRIO Armed Conflict Dataset v25.1"
+      ) +
+      theme_conflict() +
+      theme(
+        axis.title.x = element_text(size = 11, color = "grey30",
+                                    margin = ggplot2::margin(t = 8)),
+        axis.title.y = element_text(size = 11, color = "grey30",
+                                    margin = ggplot2::margin(r = 8)),
+        axis.text.x  = element_text(size = 9),
+        axis.text.y  = element_text(size = 10)
+      ) +
+      guides(color = guide_legend(nrow = 2, override.aes = list(linewidth = 2, size = 3)))
+  })
+  
+  output$conflict_table <- DT::renderDataTable({
+    d <- filtered_data() %>%
+      count(region, conflict_type, intensity_level, name = "Conflicts") %>%
+      arrange(desc(Conflicts))
+    validate(need(nrow(d) > 0, "No conflicts match the current filters."))
+    d
+  }, options = list(pageLength = 15, scrollX = TRUE), rownames = FALSE)
+  
+}                                      
+
+shinyApp(ui = ui, server = server)
+
+```
+
+
+```{=html}
+<iframe src="https://raysflores.shinyapps.io/Shiny1Viz7/" width="100%" height="800px" frameborder="0"></iframe>
+```
+
+
+## **Predicting Armed Conflict App**
+
+```{r}
+library(shiny)
+library(randomForest)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(scales)
+library(tidyr)
+library(vdemdata)
+library(WDI)
+library(readxl)
+library(tidyverse)
+
+
+deaths_conf <- readRDS("BattleDeaths_v25_1_conf.rds")
+conflict    <- readRDS("UcdpPrioConflict_v25_1 2.rds")      
+termination   <- read_csv("UCDPConflictTerminationDataset_v4_2024_Conflict.csv")
+esd    <- read_excel("External Support Dataset (ESD).xlsx")
+
+
+
+# Cleaning
+
+
+esd_flag <- esd %>%
+  group_by(conflict_id) %>%
+  summarize(has_support = as.integer(any(ext_sup == 1, na.rm = TRUE)),
+            .groups = "drop")
+
+# Battle deaths per conflict
+deaths_summary <- deaths_conf %>%
+  group_by(conflict_id) %>%
+  summarize(
+    total_deaths = sum(bd_best, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(log_deaths = log10(pmax(total_deaths, 1)))
+
+# Incompatibility from conflict — renamed to avoid collision with
+# termination's own incompatibility column
+incompatibility_flag <- conflict %>%
+  group_by(conflict_id) %>%
+  summarize(
+    incompatibility_type = first(incompatibility),
+    .groups = "drop"
+  )
+
+# WDI: global yearly average GDP (no country bridge key available)
+world_bank <- WDI(
+  indicator = "NY.GDP.PCAP.CD",
+  start     = 1960,
+  end       = 2024,
+  extra     = FALSE
+) %>%
+  rename(gdp_per_cap = NY.GDP.PCAP.CD) %>%
+  select(year, gdp_per_cap)
+
+wdi_yearly <- world_bank %>%
+  group_by(year) %>%
+  summarize(gdp_per_cap = mean(gdp_per_cap, na.rm = TRUE), .groups = "drop")
+
+wdi_summary <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  select(conflict_id, year = c_ep_endyear) %>%
+  left_join(wdi_yearly, by = "year") %>%
+  group_by(conflict_id) %>%
+  summarize(gdp_per_cap = mean(gdp_per_cap, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    gdp_per_cap = if_else(is.nan(gdp_per_cap), NA_real_, gdp_per_cap),
+    log_gdp     = log10(pmax(gdp_per_cap, 1, na.rm = TRUE))
+  )
+
+# V-Dem: global yearly average democracy score
+vdem_yearly <- vdemdata::vdem %>%
+  select(year, v2x_polyarchy) %>%
+  dplyr::filter(!is.na(v2x_polyarchy)) %>%
+  group_by(year) %>%
+  summarize(democracy = mean(v2x_polyarchy, na.rm = TRUE), .groups = "drop")
+
+vdem_summary <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  select(conflict_id, year = c_ep_endyear) %>%
+  left_join(vdem_yearly, by = "year") %>%
+  group_by(conflict_id) %>%
+  summarize(democracy = mean(democracy, na.rm = TRUE), .groups = "drop") %>%
+  mutate(democracy = if_else(is.nan(democracy), NA_real_, democracy))
+
+# ── Build RF training data ────────────────────────────────────────────
+rf_data <- termination %>%
+  dplyr::filter(c_epterm == 1) %>%
+  distinct(conflict_id, .keep_all = TRUE) %>%
+  left_join(esd_flag, by = "conflict_id") %>%
+  left_join(deaths_summary,       by = "conflict_id") %>%
+  left_join(incompatibility_flag, by = "conflict_id") %>%
+  left_join(wdi_summary,          by = "conflict_id") %>%
+  left_join(vdem_summary,         by = "conflict_id") %>%
+  mutate(
+    has_support     = replace_na(has_support, 0L),
+    log_deaths      = replace_na(log_deaths, 0),
+    incompatibility = replace_na(as.integer(incompatibility_type), 2L),
+    log_gdp         = if_else(is.na(log_gdp), median(log_gdp, na.rm = TRUE), log_gdp),
+    democracy       = if_else(is.na(democracy), median(democracy, na.rm = TRUE), democracy),
+    c_outcome_label = case_when(
+      c_outcome == 1 ~ "Peace Agreement",
+      c_outcome == 2 ~ "Ceasefire",
+      c_outcome == 3 ~ "Victory",
+      c_outcome == 4 ~ "Low Activity",
+      c_outcome == 5 ~ "Other/Unclear",
+      TRUE           ~ NA_character_
+    )
+  ) %>%
+  dplyr::filter(
+    !is.na(c_outcome_label), !is.na(type_of_conflict),
+    !is.na(region), !is.na(c_ep_dur)
+  ) %>%
+  mutate(c_outcome_label = factor(c_outcome_label)) %>%
+  select(
+    type_of_conflict, region, has_support,
+    c_ep_dur, intensity_level,
+    log_deaths, incompatibility, log_gdp, democracy,
+    c_outcome_label
+  )
+
+# training model
+set.seed(42)
+train_idx  <- sample(nrow(rf_data), 0.8 * nrow(rf_data))
+train_data <- rf_data[train_idx, ]
+test_data  <- rf_data[-train_idx, ]
+
+rf_model <- randomForest(
+  c_outcome_label ~ .,
+  data       = train_data,
+  ntree      = 500,
+  importance = TRUE
+)
+
+model_accuracy <- mean(predict(rf_model, test_data) == test_data$c_outcome_label)
+
+# UI
+ui <- fluidPage(
+  tags$head(tags$style(HTML("
+    body { font-family: Georgia, serif; background-color: #FAFAFA; }
+    h2   { font-weight: bold; color: #2C2C2A; }
+    .well { background-color: #F0F0F0; border: none; }
+    .nav-tabs > li.active > a { font-weight: bold; color: #8B0000; }
+  "))),
+  
+  titlePanel(
+    h2("Conflict Outcome Predictor",
+       tags$small(style = "font-size:14px; color:grey; display:block;",
+                  "Which structural factors determine how wars end?"))
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      selectInput("conflict_type", "Conflict Type",
+                  choices = c("Intrastate"                  = 3,
+                              "Internationalized Intrastate" = 4,
+                              "Interstate"                   = 2,
+                              "Extrasystemic"                = 1)),
+      selectInput("region", "Region",
+                  choices = c("Africa"      = 4, "Asia"        = 3,
+                              "Middle East" = 2, "Europe"      = 1,
+                              "Americas"    = 5)),
+      radioButtons("has_support", "External Support",
+                   choices  = c("Yes" = 1, "No" = 0),
+                   selected = 0,
+                   inline   = TRUE),
+      sliderInput("duration", "Episode Duration (years)",
+                  min = 1, max = 50, value = 5, step = 1),
+      radioButtons("intensity", "Peak Intensity",
+                   choices  = c("Minor Conflict (< 1,000 deaths)" = 1,
+                                "War (≥ 1,000 deaths)"           = 2),
+                   selected = 1),
+      hr(),
+      selectInput("incompatibility", "Conflict Issue",
+                  choices = c("Government"             = 2,
+                              "Territory"              = 1,
+                              "Government + Territory" = 3)),
+      
+      sliderInput("log_gdp", "GDP per Capita (log scale)",
+                  min = 2, max = 5, value = 3.5, step = 0.1),
+      
+      sliderInput("democracy", "Democracy Score (V-Dem)",
+                  min = 0, max = 1, value = 0.3, step = 0.05),
+      
+      hr(),
+      actionButton("predict_btn", "Predict Outcome",
+                   style = paste("background-color:#8B0000;",
+                                 "color:white; font-weight:bold;",
+                                 "width:100%; border:none;")),
+      hr(),
+      p(paste0("Model accuracy: ", round(model_accuracy * 100, 1), "%"),
+        style = "color:grey; font-size:11px;"),
+      p("Trained on UCDP terminated conflict episodes, 1946–2024.",
+        style = "color:grey; font-size:10px;")
+    ),
+    
+    mainPanel(
+      width = 9,
+      tabsetPanel(
+        id = "tabs",
+        
+        tabPanel("Prediction",
+                 br(),
+                 h4("Predicted Outcome Probabilities", style = "font-weight:bold;"),
+                 p("How likely is each termination type given these inputs?",
+                   style = "color:grey; font-size:11px;"),
+                 plotOutput("prob_plot", height = "320px"),
+                 br(),
+                 uiOutput("verdict_box")
+        ),
+        
+        tabPanel("What Drives the Model",
+                 br(),
+                 h4("Variable Importance", style = "font-weight:bold;"),
+                 p(paste("Which structural factors matter most?",
+                         "This supports the thesis that structural conditions",
+                         "— not just battlefield dynamics — predict outcomes."),
+                   style = "color:grey; font-size:11px;"),
+                 plotOutput("importance_plot", height = "380px")
+        ),
+        
+        tabPanel("Historical Comparators",
+                 br(),
+                 h4("How Similar Conflicts Actually Ended", style = "font-weight:bold;"),
+                 p("Conflicts matching your selected type and region.",
+                   style = "color:grey; font-size:11px;"),
+                 plotOutput("historical_plot", height = "320px"),
+                 textOutput("comparator_count")
+        )
+      )
+    )
+  )
+)
+
+# Server
+server <- function(input, output, session) {
+  
+  user_input <- eventReactive(input$predict_btn, {
+    data.frame(
+      type_of_conflict = as.integer(input$conflict_type),
+      region           = as.integer(input$region),
+      has_support      = as.integer(input$has_support),
+      c_ep_dur         = as.integer(input$duration),
+      intensity_level  = as.integer(input$intensity),
+      log_deaths       = 3,                            # fixed median
+      incompatibility  = as.integer(input$incompatibility),
+      log_gdp          = as.numeric(input$log_gdp),
+      democracy        = as.numeric(input$democracy)
+    )
+  }, ignoreNULL = FALSE)
+  
+  probs_df <- reactive({
+    probs <- predict(rf_model, user_input(), type = "prob")
+    data.frame(
+      outcome     = colnames(probs),
+      probability = as.numeric(probs[1, ])
+    ) %>%
+      mutate(
+        outcome = fct_reorder(outcome, probability),
+        is_top  = probability == max(probability)
+      )
+  })
+  
+  output$prob_plot <- renderPlot({
+    ggplot(probs_df(), aes(x = outcome, y = probability, fill = is_top)) +
+      geom_col(width = 0.65) +
+      geom_text(aes(label = percent(probability, accuracy = 1)),
+                hjust = -0.15, size = 4, fontface = "bold") +
+      coord_flip() +
+      scale_fill_manual(values = c("FALSE" = "grey80", "TRUE" = "#8B0000")) +
+      scale_y_continuous(limits = c(0, 1), labels = percent_format(),
+                         expand = c(0, 0.01)) +
+      labs(x = NULL, y = "Probability") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position    = "none",
+            panel.grid.minor   = element_blank(),
+            panel.grid.major.y = element_blank(),
+            axis.text.y        = element_text(face = "bold", size = 11))
+  })
+  
+  output$verdict_box <- renderUI({
+    top <- probs_df() %>% dplyr::filter(is_top)
+    div(style = paste("background:#F5F5F5; border-left:4px solid #8B0000;",
+                      "padding:12px 16px; border-radius:4px;"),
+        h4(paste0("Predicted: ", top$outcome,
+                  " (", percent(top$probability, accuracy = 1), " confidence)"),
+           style = "margin:0; color:#8B0000;")
+    )
+  })
+  
+  output$importance_plot <- renderPlot({
+    imp <- importance(rf_model, type = 2) %>%
+      as.data.frame() %>%
+      tibble::rownames_to_column("variable") %>%
+      rename(importance = MeanDecreaseGini) %>%
+      mutate(
+        variable = recode(variable,
+                          "type_of_conflict" = "Conflict Type",
+                          "region"           = "Region",
+                          "has_support"      = "External Support",
+                          "c_ep_dur"         = "Episode Duration",
+                          "intensity_level"  = "Peak Intensity",
+                          "log_deaths"       = "Battle Deaths (log)",
+                          "incompatibility"  = "Conflict Issue",
+                          "log_gdp"          = "GDP per Capita (log)",
+                          "democracy"        = "Democracy Score"
+        ),
+        variable = fct_reorder(variable, importance),
+        var_type = case_when(
+          variable %in% c("Conflict Type", "Region", "External Support",
+                          "Conflict Issue", "GDP per Capita (log)",
+                          "Democracy Score") ~ "Structural",
+          TRUE                              ~ "Battlefield"
+        )
+      )
+    
+    ggplot(imp, aes(x = variable, y = importance, fill = var_type)) +
+      geom_col(width = 0.65) +
+      coord_flip() +
+      scale_fill_manual(values = c("Structural"  = "#8B0000",
+                                   "Battlefield" = "#4393C3"),
+                        name   = "Factor type") +
+      labs(x = NULL, y = "Mean Decrease in Gini",
+           caption = "Red = structural factors  |  Blue = battlefield factors") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position    = "bottom",
+            panel.grid.minor   = element_blank(),
+            panel.grid.major.y = element_blank(),
+            axis.text.y        = element_text(face = "bold", size = 11))
+  })
+  
+  output$historical_plot <- renderPlot({
+    similar <- rf_data %>%
+      dplyr::filter(
+        type_of_conflict == as.integer(input$conflict_type),
+        region           == as.integer(input$region)
+      ) %>%
+      count(c_outcome_label) %>%
+      mutate(pct = n / sum(n),
+             c_outcome_label = fct_reorder(c_outcome_label, pct))
+    
+    ggplot(similar, aes(x = c_outcome_label, y = pct,
+                        fill = c_outcome_label)) +
+      geom_col(width = 0.65) +
+      geom_text(aes(label = percent(pct, accuracy = 1)),
+                hjust = -0.15, size = 4) +
+      coord_flip() +
+      scale_fill_manual(values = c(
+        "Peace Agreement" = "#1A6830", "Ceasefire"    = "#4393C3",
+        "Victory"         = "#8B0000", "Low Activity" = "#D85A30",
+        "Other/Unclear"   = "#888780"
+      )) +
+      scale_y_continuous(limits = c(0, 1), labels = percent_format()) +
+      labs(x = NULL, y = "Share of historical conflicts") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position    = "none",
+            panel.grid.minor   = element_blank(),
+            panel.grid.major.y = element_blank(),
+            axis.text.y        = element_text(face = "bold", size = 11))
+  })
+  
+  output$comparator_count <- renderText({
+    n <- rf_data %>%
+      dplyr::filter(
+        type_of_conflict == as.integer(input$conflict_type),
+        region           == as.integer(input$region)
+      ) %>%
+      nrow()
+    paste0(n, " historical conflicts match your selection.")
+  })
+}
+
+shinyApp(ui, server)
+
+
+```
+
+
+```{=html}
+<iframe src="https://raysflores.shinyapps.io/Viz8Shiny2/" width="100%" height="800px" frameborder="0"></iframe>
+```
+
+

@@ -1,0 +1,44 @@
+# R
+.Rhistory
+.RData
+.RDataTmp
+.Rapp.history
+.Rproj.user/
+*.Rproj
+
+# Rendered output (keep source, skip large HTML renders)
+*_files/
+*-cache/
+*_cache/
+
+# Quarto / R Markdown intermediates
+*.rmarkdown
+_freeze/
+
+# Large binary data files (re-download from source)
+*.tif
+*.rds
+*.gdb
+*.sbn
+*.sbx
+*.shp.xml
+
+# Shiny deployment credentials (contains account tokens)
+rsconnect/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Microsoft Office temp files
+~$*.docx
+~$*.xlsx
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Misc
+*.textClipping
+*.dmg
+untitled*
+Untitled*

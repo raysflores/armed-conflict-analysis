@@ -1,0 +1,153 @@
+---
+title: "Predicting the Outcome of Armed Conflict"
+subtitle: "Raymond Santiago Flores"
+format: html
+---
+
+### Loading Librarys
+
+```{r, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(astsa)
+library(forecast)
+library(readxl)
+library(conflicted)
+library(tidyverse) 
+library(cshapes)
+library(WDI)
+```
+
+### Loading Conflict Data
+
+```{r, warning=FALSE}
+# Core conflict data
+conflict      <- readRDS("Data/UcdpPrioConflict_v25_1.rds")
+
+# Battle deaths
+deaths_conf   <- readRDS("Data/BattleDeaths_v25_1_conf.rds")
+deaths_dyad   <- readRDS("Data/BattleDeaths_v25_1.rds")
+
+# GED events
+ged           <- readRDS("Data/GEDEvent_v25_1.rds")
+
+# Termination data
+termination      <- read_csv("Data/UCDPConflictTerminationDataset_v4_2024_Conflict.csv")
+termination_dyad <- read_csv("Data/UCDPConflictTerminationDyad.csv")
+
+# Spreadsheets
+issues <- read_excel("Data/Conflict Issues Dataset.xlsx")
+view(issues)
+esd    <- read_excel("Data/External Support Dataset (ESD).xlsx")
+peace  <- read_excel("Data/Peace Agreement.xlsx")
+```
+
+### Contry Demographics via WDI
+
+```{r, warning=FALSE}
+world_bank <- WDI::WDI(
+    indicator = c(
+        gdp_per_cap = "NY.GDP.PCAP.KD", #GDP per capita
+        population = "SP.POP.TOTL", #Total population
+        military_spend = "MS.MIL.XPND.GD.ZS" #Military expenditure % of GDP
+    ),
+    start = 1960,
+    end = 2024,
+    extra = FALSE
+)
+
+View(world_bank)
+```
+
+### Geographic/Terrain data via cshapes
+
+```{r, warning=FALSE}
+
+install.packages("cshapes")
+library(cshapes)
+shapes <- cshp(date = as.Date("2019-01-01"))
+
+
+
+
+```
+
+### Democracy Scores via vdemdata
+
+```{r, warning=FALSE}
+# Still considering the importance of this,
+
+```
+
+### Joining Data 
+
+```{r}
+install.packages("countrycode")
+library(countrycode)
+# Example: add ISO codes to world_bank for easier joining
+world_bank <- world_bank |>
+  mutate(gwno = countrycode(iso2c, origin = "iso2c", destination = "gwn"))
+summary(world_bank)
+```
+
+Looking Next
+
+### **Viz 3 — Conflict Issues Heatmap**
+
+```{r}
+colnames(conflict)
+
+ggplot()
+
+```
+
+### **Viz 4 — Escalation Patterns**
+
+```{r}
+
+```
+
+### **Viz 5 — External Support Scatter Tool: Plotly via ggplotly()**
+
+```{r}
+
+```
+
+### **Viz 6 - Conflict Termination Alluvial**
+
+```{r}
+
+```
+
+Code for Random Forest model
+
+#### Assumptions check/loading package
+
+```{r}
+#Packages
+library(randomForest)
+#Assumptions check
+
+#Preliminary Code for random forest
+
+
+#Visualizations for a random forest
+
+```
+
+
+### **Viz 7 - Intelligence Dashboard**
+
+```{r}
+
+```
+
+### **Viz 8 - Conflict Outcome Predictor**
+
+```{r}
+
+```
+
+
+
