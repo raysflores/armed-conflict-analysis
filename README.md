@@ -20,6 +20,10 @@ This project asks: *What structural patterns distinguish conflicts that end in p
 | `shiny/app.R` (App 1) | Interactive conflict explorer — filter by type, intensity, region, and time period |
 | `conflict-predictor/app.R` (App 2) | Deployed Random Forest outcome predictor — user inputs conflict characteristics, model returns predicted resolution probability |
 
+https://htmlpreview.github.io/?
+https://github.com/raysflores/armed-conflict-analysis/blob/main/armed-conflict-prediction.html
+
+
 ---
 
 ## Data Sources
